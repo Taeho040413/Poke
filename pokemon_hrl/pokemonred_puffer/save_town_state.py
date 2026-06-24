@@ -1,0 +1,335 @@
+import argparse
+import io
+from pathlib import Path
+from queue import Queue, Empty
+from threading import Thread
+from pyboy import PyBoy
+from pyboy.utils import WindowEvent
+
+_PACKAGE_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _PACKAGE_DIR.parent
+DEFAULT_ROM_PATH = _PROJECT_ROOT / "assets" / "red.gb"
+DEFAULT_RAM_PATH = _PROJECT_ROOT / "assets" / "red.gb.ram"
+STATE_DIR = _PROJECT_ROOT / "assets" / "pyboy_states"
+POKERED_SYM = _PACKAGE_DIR / "pokered.sym"
+
+
+def export_sav_to_state(
+    sav_path: Path,
+    out_state_path: Path,
+    *,
+    rom_path: Path = DEFAULT_ROM_PATH,
+    warmup_ticks: int = 2400,
+    headless: bool = True,
+) -> Path:
+    """배터리 `.sav`를 PyBoy `.state` 한 파일로 변환 (학습용 고정 시작점)."""
+    if not sav_path.is_file():
+        raise FileNotFoundError(f"SAV not found: {sav_path}")
+    if not rom_path.is_file():
+        raise FileNotFoundError(f"ROM not found: {rom_path}")
+    ram_bytes = sav_path_to_ram_bytes(sav_path)
+    ram = io.BytesIO(ram_bytes)
+    sym = str(POKERED_SYM) if POKERED_SYM.is_file() else None
+    pyboy_kwargs = dict(
+        window="null" if headless else "SDL2",
+        log_level="CRITICAL",
+        symbols=sym,
+        sound_emulated=False,
+    )
+    try:
+        pyboy = PyBoy(
+            str(rom_path),
+            ram_file=ram,
+            **pyboy_kwargs,
+        )
+    except KeyError as exc:
+        # PyBoy 2.x may reject `ram_file`; fall back to sidecar `.gb.ram`.
+        if "ram_file" not in str(exc):
+            raise
+        sidecar_ram = rom_path.with_suffix(rom_path.suffix + ".ram")
+        sidecar_ram.write_bytes(ram_bytes)
+        pyboy = PyBoy(str(rom_path), **pyboy_kwargs)
+    # From SRAM, game still needs title/menu inputs before reaching overworld.
+    # Reuse the same start/A pattern as interactive helper.
+    auto_skip_intro(pyboy, max_ticks=max(1, warmup_ticks))
+    out_state_path = out_state_path.resolve()
+    out_state_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_state_path, "wb") as f:
+        pyboy.save_state(f)
+    pyboy.stop(save=False)
+    print(f"Exported: {out_state_path} ({out_state_path.stat().st_size} bytes)", flush=True)
+    return out_state_path
+
+
+def stdin_worker(cmd_q: Queue):
+    print("명령 형식: save 이름   예) save ViridianCity", flush=True)
+    print("종료 형식: q", flush=True)
+    while True:
+        try:
+            cmd = input("> ").strip()
+        except EOFError:
+            cmd = "q"
+        cmd_q.put(cmd)
+        if cmd.lower() == "q":
+            break
+
+
+def sav_path_to_ram_bytes(sav_path: Path) -> bytes:
+    """Extract 32KB cartridge SRAM from a battery `.sav` for use with PyBoy ``ram_file=``."""
+    data = sav_path.read_bytes()
+    size = len(data)
+    if size < 32768:
+        raise ValueError(f"SAV too small: {sav_path} ({size} bytes)")
+    if size == 32768:
+        return data
+    if size == 32772:
+        return data[:32768]
+    return data[:32768]
+
+
+def install_ram_from_sav(sav_path: Path, ram_path: Path):
+    data = sav_path.read_bytes()
+    size = len(data)
+    if size < 32768:
+        raise ValueError(f"SAV too small: {sav_path} ({size} bytes)")
+
+    if size == 32768:
+        strategy = "raw-32KB"
+    elif size == 32772:
+        strategy = "32772->head32KB"
+    else:
+        head_candidate = sav_path.with_suffix(".head32k.ram")
+        tail_candidate = sav_path.with_suffix(".tail32k.ram")
+        head_candidate.write_bytes(data[:32768])
+        tail_candidate.write_bytes(data[-32768:])
+        strategy = "fallback-head32KB"
+        print(
+            f"주의: 비표준 SAV 크기({size}). 후보 생성: {head_candidate}, {tail_candidate}",
+            flush=True,
+        )
+
+    out = sav_path_to_ram_bytes(sav_path)
+    backup_path = ram_path.with_suffix(ram_path.suffix + ".bak")
+    if ram_path.exists() and not backup_path.exists():
+        backup_path.write_bytes(ram_path.read_bytes())
+        print(f"기존 RAM 백업: {backup_path}", flush=True)
+
+    ram_path.write_bytes(out)
+    print(f"SAV 적용 완료 ({strategy}): {ram_path} ({len(out)} bytes)", flush=True)
+
+
+# Pan Docs cartridge RAM size codes (byte 0x0149) -> number of 8KB banks.
+_CARTRIDGE_RAM_BANKS = {0x00: 1, 0x01: 1, 0x02: 1, 0x03: 4, 0x04: 16, 0x05: 8}
+
+
+def expected_cartridge_ram_bytes(rom_path: Path) -> int:
+    """Return expected sidecar ``.gb.ram`` size for a ROM (0 if unknown)."""
+    header = rom_path.read_bytes()
+    if len(header) < 0x014A:
+        return 0
+    banks = _CARTRIDGE_RAM_BANKS.get(header[0x0149])
+    if banks is None:
+        return 0
+    return banks * 8 * 1024
+
+
+def quarantine_invalid_sidecar_ram(rom_path: Path) -> Path | None:
+    """Rename truncated sidecar RAM so PyBoy can start (uses ``.state`` on reset)."""
+    sidecar = rom_path.with_suffix(rom_path.suffix + ".ram")
+    if not sidecar.is_file():
+        return None
+    expected = expected_cartridge_ram_bytes(rom_path)
+    if expected <= 0:
+        return None
+    actual = sidecar.stat().st_size
+    if actual == expected:
+        return None
+    corrupt = sidecar.with_suffix(sidecar.suffix + ".corrupt")
+    if corrupt.exists():
+        corrupt.unlink()
+    sidecar.replace(corrupt)
+    print(
+        f"손상된 RAM 사이드카 이동: {sidecar.name} ({actual} bytes, "
+        f"필요 {expected} bytes) -> {corrupt.name}",
+        flush=True,
+    )
+    return corrupt
+
+
+def find_default_sav_candidates(rom_path: Path, ram_path: Path) -> list[Path]:
+    return [
+        ram_path.with_suffix(".sav"),
+        rom_path.with_suffix(".sav"),
+        rom_path.with_name(f"{rom_path.name}.sav"),
+    ]
+
+
+def auto_skip_intro(pyboy: PyBoy, max_ticks: int = 2400):
+    # Try to pass title/intro and land on overworld quickly.
+    for i in range(max_ticks):
+        if i % 24 == 0:
+            pyboy.send_input(WindowEvent.PRESS_BUTTON_START)
+        if i % 24 == 1:
+            pyboy.send_input(WindowEvent.RELEASE_BUTTON_START)
+        if i % 12 == 0:
+            pyboy.send_input(WindowEvent.PRESS_BUTTON_A)
+        if i % 12 == 1:
+            pyboy.send_input(WindowEvent.RELEASE_BUTTON_A)
+        if pyboy.tick() is False:
+            break
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--rom-path",
+        type=Path,
+        default=DEFAULT_ROM_PATH,
+        help="ROM path to run in PyBoy",
+    )
+    parser.add_argument(
+        "--ram-path",
+        type=Path,
+        default=DEFAULT_RAM_PATH,
+        help="RAM path used by PyBoy battery save",
+    )
+    parser.add_argument(
+        "--sav-path",
+        type=Path,
+        default=None,
+        help="Optional .sav path to convert/apply into --ram-path before launching",
+    )
+    parser.add_argument(
+        "--auto-skip-intro",
+        action="store_true",
+        help="Auto send START/A inputs to skip intro/title and continue",
+    )
+    parser.add_argument(
+        "--speed",
+        type=int,
+        default=5,
+        help="PyBoy emulation speed multiplier (default: 5, e.g. 3 for 3x)",
+    )
+    parser.add_argument(
+        "--export-sav",
+        type=Path,
+        default=None,
+        help="배터리 .sav 경로 - 지정 시 비대화형으로 .state만 만들고 종료",
+    )
+    parser.add_argument(
+        "--export-state-out",
+        type=Path,
+        default=None,
+        help='--export-sav 와 함께: 저장할 .state 경로 (예: "pyboy_states/CeruleanCity.state")',
+    )
+    parser.add_argument(
+        "--warmup-ticks",
+        type=int,
+        default=2400,
+        help="export 시 자동 START/A 입력 tick 수 (기본 2400)",
+    )
+    args = parser.parse_args()
+
+    if args.export_sav is not None:
+        if args.export_state_out is None:
+            raise SystemExit("--export-sav 를 쓰면 --export-state-out 도 필수입니다.")
+        export_sav_to_state(
+            args.export_sav.expanduser().resolve(),
+            args.export_state_out.expanduser().resolve(),
+            rom_path=args.rom_path.expanduser().resolve(),
+            warmup_ticks=args.warmup_ticks,
+            headless=True,
+        )
+        return
+
+    rom_path = args.rom_path
+    ram_path = args.ram_path
+    print(f"rom exists: {rom_path.exists()} -> {rom_path}", flush=True)
+    print(f"ram exists: {ram_path.exists()} -> {ram_path}", flush=True)
+
+    if not rom_path.exists():
+        raise FileNotFoundError(f"ROM not found: {rom_path}")
+
+    if args.sav_path is not None:
+        if not args.sav_path.exists():
+            raise FileNotFoundError(f"SAV not found: {args.sav_path}")
+        ram_path.parent.mkdir(parents=True, exist_ok=True)
+        install_ram_from_sav(args.sav_path, ram_path)
+    elif not ram_path.exists():
+        candidate_savs = [p for p in find_default_sav_candidates(rom_path, ram_path) if p.exists()]
+        if candidate_savs:
+            ram_path.parent.mkdir(parents=True, exist_ok=True)
+            print(f"RAM 없음. SAV 자동 변환 사용: {candidate_savs[0]}", flush=True)
+            install_ram_from_sav(candidate_savs[0], ram_path)
+        else:
+            print(
+                "RAM/SAV 파일이 없어서 새 게임 상태로 실행합니다. "
+                "--sav-path 로 배터리 세이브를 지정하면 Continue 상태에서 시작할 수 있습니다.",
+                flush=True,
+            )
+
+    STATE_DIR.mkdir(exist_ok=True)
+
+    sym = str(POKERED_SYM) if POKERED_SYM.is_file() else None
+    pyboy_kwargs = dict(
+        window="SDL2",
+        log_level="CRITICAL",
+        symbols=sym,
+        sound_emulated=False,
+    )
+    if ram_path.exists():
+        pyboy = PyBoy(str(rom_path), ram_file=io.BytesIO(ram_path.read_bytes()), **pyboy_kwargs)
+        print(f"RAM 로드 완료: {ram_path}", flush=True)
+    else:
+        pyboy = PyBoy(str(rom_path), **pyboy_kwargs)
+        print("RAM 없이 실행됨", flush=True)
+    if args.speed < 1:
+        raise ValueError("--speed must be >= 1")
+    pyboy.set_emulation_speed(args.speed)
+    print("PyBoy 실행됨. SDL 창에서 Continue로 들어가서 공중날기 쓰면 됨.", flush=True)
+    if args.auto_skip_intro:
+        print("인트로/타이틀 자동 스킵 시도 중...", flush=True)
+        auto_skip_intro(pyboy)
+        print("자동 스킵 입력 완료. 화면 확인 후 save 명령 입력하세요.", flush=True)
+
+    cmd_q = Queue()
+    t = Thread(target=stdin_worker, args=(cmd_q,), daemon=True)
+    t.start()
+
+    running = True
+    while running:
+        # 게임을 실제로 진행시키는 핵심
+        still_running = pyboy.tick()
+        if still_running is False:
+            break
+
+        try:
+            cmd = cmd_q.get_nowait()
+        except Empty:
+            continue
+
+        if not cmd:
+            continue
+
+        if cmd.lower() == "q":
+            running = False
+            continue
+
+        if cmd.lower().startswith("save "):
+            name = cmd[5:].strip()
+            if not name:
+                print("이름이 비었음. 예: save PalletTown", flush=True)
+                continue
+
+            out_path = STATE_DIR / f"{name}.state"
+            with open(out_path, "wb") as f:
+                pyboy.save_state(f)
+            print(f"저장 완료: {out_path}", flush=True)
+        else:
+            print("알 수 없는 명령. 예: save ViridianCity / q", flush=True)
+
+    pyboy.stop()
+    print("종료됨", flush=True)
+
+if __name__ == "__main__":
+    main()

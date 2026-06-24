@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+*.so
+
+# IDE / editor
+.vscode/
+
+# ML / training artifacts
+wandb/
+runs/
+pokemon_hrl/runs/
+pokemon_hrl/checkpoints/
+*.pt
+*.db
+
+# Game ROM (supply locally; not redistributable)
+*.gb
+*.gb.ram
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,58 @@
+[project]
+name = "pokemon-hrl"
+version = "0.1.0"
+description = "Pokemon Red LLM-HRL (self-contained pokemon_hrl package)."
+requires-python = ">= 3.10, < 3.12"
+dependencies = [
+    "einops",
+    "mediapy",
+    "numba",
+    "numpy",
+    "omegaconf",
+    "opencv-python==3.4.17.63",
+    "psutil",
+    "pyboy>=2",
+    "pynvml",
+    "pufferlib @ git+https://github.com/thatguy11325/PufferLib.git@1.0",
+    "scikit-image",
+    "torch>=2.4",
+    "torchvision",
+    "typer",
+    "tyro",
+    "wandb",
+    "websockets",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+dev = ["pytest", "ruff"]
+autotune = ["optuna"]
+
+[tool.setuptools.package-dir]
+"pokemonred_puffer" = "pokemon_hrl/pokemonred_puffer"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pokemon_hrl*", "pokemonred_puffer*"]
+
+[tool.setuptools.package-data]
+pokemon_hrl = [
+    "config/*.yaml",
+    "config/*.txt",
+    "training/curriculum.yaml",
+    "assets/pyboy_states/*",
+    "assets/pyboy_states/*.sav",
+    "pokemonred_puffer/*.json",
+    "pokemonred_puffer/pokered.sym",
+]
+pokemonred_puffer = [
+    "*.json",
+    "pokered.sym",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

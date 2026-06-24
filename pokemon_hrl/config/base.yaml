@@ -1,0 +1,62 @@
+# Minimal PyBoy / policy settings for Pokemon HRL.
+# Mode training, rewards, wrappers live in hrl_config.yaml.
+
+env:
+  state_dir: assets/pyboy_states
+  gb_path: assets/red.gb
+  init_state: red
+  init_state_path: assets/pyboy_states/red.state
+
+  headless: false
+  video_dir: runs/video
+  action_freq: 12
+  max_steps: 40000
+  reduce_res: true
+  two_bit: true
+  log_frequency: 200
+  save_state: true
+  save_video: false
+  fast_video: false
+  n_record: 10
+  perfect_ivs: false
+  animate_scripts: false
+  exploration_inc: 1.0
+  exploration_max: 1.0
+  max_steps_scaling: 0.3
+  map_id_scalefactor: 9.539340019226074
+
+  # HRL: agent must act; no environment autopilot
+  disable_ai_actions: false
+  auto_flash: false
+  auto_teach_cut: false
+  auto_use_cut: false
+  auto_use_strength: false
+  auto_use_surf: false
+  auto_teach_surf: false
+  auto_teach_strength: false
+  auto_solve_strength_puzzles: false
+  auto_remove_all_nonuseful_items: false
+  auto_pokeflute: false
+  auto_next_elevator_floor: false
+  skip_safari_zone: false
+  infinite_safari_steps: false
+  insert_saffron_guard_drinks: false
+  infinite_money: false
+  infinite_health: false
+
+  # Long-horizon HRL: do not end on first gym badge
+  end_episode_on_first_gym: false
+  disable_wild_encounters: false
+  use_global_map: false
+  required_tolerance: null
+
+policies:
+  multi_convolutional.MultiConvolutionalPolicy:
+    policy:
+      hidden_size: 512
+    rnn:
+      name: MultiConvolutionalRNN
+      args:
+        input_size: 512
+        hidden_size: 512
+        num_layers: 1

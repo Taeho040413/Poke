@@ -1,0 +1,182 @@
+hrl:
+  planner:
+    enabled: false
+    provider: openrouter
+    model: openai/gpt-oss-120b:free
+    call_on: goal_check
+    api_key_env: OPENROUTER_API_KEY
+    timeout_sec: 120
+    max_retries: 2
+    prompt_path: config/planner_system_prompt.txt
+
+  mode_selector:
+    enabled: false
+    forced_mode: interactive
+
+  interactive:
+    max_steps: 15000
+
+  execution:
+    tile_move_enabled: true
+    max_tile_substeps: 120
+    battle_action_mask: true
+    tile_blocked:
+      enabled: true
+      ttl_steps: 100
+      weaken_weight: 0.05
+      retry_window_steps: 50
+      confidence_threshold: 1
+
+  checkpoint:
+    save_game_state: true
+    save_policy: true
+    rollback_game_only: true
+    directory: checkpoints
+    reward_floor: -10.0
+    reward_floor_rollback_penalty: -1.0
+
+  curriculum:
+    path: training/curriculum.yaml
+
+  logging:
+    goal_events: true
+
+  progress:
+    subgoal_success_reward: 3.0
+    goal_success_reward: 5.0
+
+  goal_memory:
+    enabled: true
+    local_radius: 5
+    include_visited: true
+    include_blocked: true
+    include_warps: true
+    include_interactions: true
+    include_goal_vector: true
+    target_map_enter_reward: 0.5  # baseline target_map_entry already shapes map arrival
+    target_map_explore_reward: 0.004
+    target_event_done_reward: 2.0
+    target_interaction_reward: 0.2
+    blocked_repeat_penalty: 0.0  # unused; interactive_mode.reward.blocked_tile_retry handles retries
+
+  training:
+    mode: interactive
+    use_curriculum_init_state: false
+    exp_id: hrl-interactive-v1
+    total_timesteps: 1_000_000
+    num_envs: 1
+    num_workers: 1
+    env_batch_size: 1
+    batch_size: 256
+    minibatch_size: 64
+    bptt_horizon: 16
+    update_epochs: 4
+    seed: 1
+    device: auto
+    verbose: false
+    compile: false
+    use_rnn: true
+    save_checkpoint: true
+    checkpoint_interval: 100
+    resume_checkpoint: auto
+    load_optimizer_state: true
+    sqlite_wrapper: false
+    async_wrapper: false
+    save_on_first_gym: false
+    save_on_exit: false  # true면 학습 정상 종료 시 model_latest 갱신 (자동 재개용)
+    save_policy_on_interrupt: true  # Ctrl+C 시 model_interrupt.pt 만 저장 (재개용 아님)
+    ent_coef: 0.01
+    learning_rate: 0.0002
+    gamma: 0.995
+    gae_lambda: 0.95
+
+  autotune:
+    study_name: interactive-ppo
+    n_trials: 20
+    timesteps_per_trial: 200000
+    direction: maximize
+    storage: sqlite:///runs/optuna/interactive.db
+    params:
+      learning_rate:
+        type: float
+        low: 0.00005
+        high: 0.0005
+        log: true
+      ent_coef:
+        type: float
+        low: 0.001
+        high: 0.05
+        log: true
+      gamma:
+        type: float
+        low: 0.99
+        high: 0.999
+      gae_lambda:
+        type: float
+        low: 0.9
+        high: 0.99
+      update_epochs:
+        type: int
+        low: 3
+        high: 8
+      minibatch_size:
+        type: categorical
+        choices: [32, 64, 128]
+
+# Interactive-mode v1: no exploration wrappers (Mode Layer handles routing later)
+wrappers:
+  interactive: []
+
+# Interaction + exploration shaping for Interactive mode
+rewards:
+  hrl.rewards.interactive_mode.InteractiveModeRewardEnv:
+    reward:
+      # main stream
+      event: 3.0
+      item: 0.5
+      # interaction
+      gym_core_npc: 1.0
+      npc_first_talk: 0.6
+      object_first_interaction: 0.05
+      #new_npc_textbox: 0.0
+      new_building: 0.6
+      new_room: 0.4
+      pokecenter_first_entry: 1.0
+      target_map_entry: 1.2  # hint.target_map_id 에 도착할 때
+      # exploration
+      new_tile: 0.002
+      new_map: 0.3
+      # battle
+      trainer_battle_win: 0.3
+      wild_battle_win: 0.05
+      pokemon_heal_hp: 0.005
+      party_level: 0.3
+      # penalty
+      step_penalty: -0.0002
+      repeat_npc_penalty: -0.03
+      repeat_object_penalty: -0.03
+      #invalid_interaction: 0.0
+      start_menu_penalty: -0.02
+      #wild_encounter_penalty: 0.0
+      stuck_penalty: -0.05
+      blocked_tile_retry: -0.2
+      death: -0.05
+
+train:
+  torch_deterministic: true
+  norm_adv: true
+  clip_coef: 0.1
+  clip_vloss: true
+  max_grad_norm: 0.5
+  vf_clip_coef: 0.1
+  vf_coef: 0.5
+  cpu_offload: false
+  env_pool: false
+  zero_copy: false
+  track: true
+
+wandb:
+  entity: TestRedRl
+  project: Red_LLM_RL
+  group: ~
+  base_url: https://api.wandb.ai

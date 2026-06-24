@@ -1,0 +1,42 @@
+# Interactive-mode curriculum (v1: same-map interaction).
+# Long-term HRL goal: clear 3rd gym (Vermilion / Lt. Surge) and reach Lavender Town.
+# Goals and subgoals are memory criteria tokens only (no natural language).
+
+scenarios:
+  - name: pewter_interact
+    init_state: red
+    subgoal:
+      - success_criteria:
+          - stat_on_target_map:first_npc_talk_count
+      - success_criteria:
+          - stat_on_target_map:first_object_interaction_count
+    hint:
+      target_map_id: 2
+    success_criteria:
+      - stat_on_target_map:first_npc_talk_count
+    failure_criteria:
+      - no_progress
+
+  - name: cerulean_interact
+    init_state: red
+    subgoal:
+      - success_criteria:
+          - stat_on_target_map:first_object_interaction_count
+      - success_criteria:
+          - stat_on_target_map:first_npc_talk_count
+    hint:
+      target_map_id: 3
+    success_criteria:
+      - stat_on_target_map:first_npc_talk_count
+    failure_criteria: []
+
+  - name: vermilion_interact
+    init_state: red
+    subgoal:
+      - success_criteria:
+          - stat_on_target_map:first_object_interaction_count
+    hint:
+      target_map_id: 5
+    success_criteria:
+      - flag:EVENT_BEAT_LT_SURGE
+    failure_criteria: []
