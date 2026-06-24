@@ -33,8 +33,14 @@ def _apply_trial_params(config, trial, param_specs: dict) -> None:
         if name in ("learning_rate", "ent_coef", "gamma", "gae_lambda", "clip_coef", "vf_coef"):
             config.hrl.training[name] = value
             config.train[name] = value
-        elif name in ("minibatch_size", "update_epochs", "batch_size", "bptt_horizon", "num_envs"):
+        elif name in ("minibatch_size", "update_epochs", "batch_size", "bptt_horizon"):
             config.hrl.training[name] = value
+        elif name == "num_envs":
+            num_envs = int(value)
+            config.hrl.training.num_envs = num_envs
+            config.hrl.training.num_workers = num_envs
+            config.hrl.training.env_batch_size = num_envs
+            config.hrl.training.vectorization = "multiprocessing" if num_envs > 1 else "serial"
         elif name.startswith("reward."):
             reward_key = "hrl.rewards.interactive_mode.InteractiveModeRewardEnv"
             field = name.split(".", 1)[1]
@@ -52,9 +58,9 @@ def main(
     timesteps: int | None = typer.Option(None, help="Override timesteps per trial"),
     study_name: str | None = typer.Option(None),
     headless: bool = typer.Option(
-        False,
+        True,
         "--headless/--no-headless",
-        help="PyBoy 창 없이 실행 (기본: 게임 화면 표시)",
+        help="PyBoy 창 없이 실행 (서버 기본: headless)",
     ),
 ) -> None:
     try:
@@ -90,8 +96,6 @@ def main(
         return float(result["mean_reward"])
 
     if storage:
-        from pathlib import Path
-
         db_path = str(storage).replace("sqlite:///", "", 1)
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         study = optuna.create_study(

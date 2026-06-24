@@ -64,10 +64,12 @@ hrl:
     use_curriculum_init_state: false
     exp_id: hrl-interactive-v1
     total_timesteps: 1_000_000
-    num_envs: 1
-    num_workers: 1
-    env_batch_size: 1
-    batch_size: 256
+    # 서버 autotune 결과 (32코어): num_envs=32, SPS ~2400 vs serial ~108
+    vectorization: multiprocessing
+    num_envs: 32
+    num_workers: 32
+    env_batch_size: 32
+    batch_size: 1
     minibatch_size: 64
     bptt_horizon: 16
     update_epochs: 4
@@ -90,6 +92,13 @@ hrl:
     gamma: 0.995
     gae_lambda: 0.95
 
+  # pufferlib.vector.autotune — CPU/RAM 기준 env 병렬 수 추천
+  env_autotune:
+    batch_size: 1
+    max_envs: 32
+    max_env_ram_gb: 64
+    time_per_test: 5
+
   autotune:
     study_name: interactive-ppo
     n_trials: 20
@@ -97,6 +106,12 @@ hrl:
     direction: maximize
     storage: sqlite:///runs/optuna/interactive.db
     params:
+      num_envs:
+        type: categorical
+        choices: [1, 8, 16, 32]
+      batch_size:
+        type: categorical
+        choices: [256, 512, 1024]
       learning_rate:
         type: float
         low: 0.00005

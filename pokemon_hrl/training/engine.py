@@ -40,6 +40,25 @@ def resolve_device(raw: str) -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def resolve_vector_backend(train_cfg: Namespace):
+    """Pick pufferlib vecenv backend from config (serial vs multiprocessing)."""
+    from pufferlib import vector
+
+    raw = str(getattr(train_cfg, "vectorization", "auto")).lower()
+    num_envs = int(getattr(train_cfg, "num_envs", 1))
+
+    if raw in ("serial", "none"):
+        return vector.Serial
+    if raw in ("multiprocessing", "mp", "parallel"):
+        return vector.Multiprocessing
+    if raw == "ray":
+        return vector.Ray
+    # auto: parallel only when multiple envs are requested
+    if num_envs > 1:
+        return vector.Multiprocessing
+    return vector.Serial
+
+
 # Keys required by CleanPuffeRL but not always present in hrl_config train sections.
 _CLEANRL_PPO_DEFAULTS: dict[str, object] = {
     "archive_states": False,
@@ -59,6 +78,7 @@ _CLEANRL_PPO_DEFAULTS: dict[str, object] = {
     "wandb_environment_metrics": "reward_only",
     "eval_interval": 1,
     "load_optimizer_state": False,
+    "vectorization": "auto",
 }
 
 
@@ -223,13 +243,35 @@ def run_interactive_training(
             shared_plan=shared_plan,
         )
 
-    vecenv = vector.make(
-        env_creator,
-        num_envs=int(train_cfg.num_envs),
-        num_workers=int(train_cfg.num_workers),
-        batch_size=int(train_cfg.env_batch_size),
-        backend=vector.Serial,
-    )
+    num_envs = int(train_cfg.num_envs)
+    num_workers = int(train_cfg.num_workers)
+    env_batch_size = int(train_cfg.env_batch_size)
+    if num_workers > num_envs:
+        raise ValueError(f"num_workers ({num_workers}) must be <= num_envs ({num_envs})")
+    if num_envs % max(1, num_workers) != 0:
+        raise ValueError(
+            f"num_envs ({num_envs}) must be divisible by num_workers ({num_workers})"
+        )
+    if env_batch_size > num_envs:
+        raise ValueError(
+            f"env_batch_size ({env_batch_size}) must be <= num_envs ({num_envs})"
+        )
+    if num_envs % env_batch_size != 0:
+        raise ValueError(
+            f"num_envs ({num_envs}) must be divisible by env_batch_size ({env_batch_size})"
+        )
+
+    backend = resolve_vector_backend(train_cfg)
+    vecenv_kwargs: dict[str, Any] = {
+        "num_envs": num_envs,
+        "num_workers": num_workers,
+        "batch_size": env_batch_size,
+        "backend": backend,
+    }
+    if bool(getattr(train_cfg, "zero_copy", False)):
+        vecenv_kwargs["zero_copy"] = True
+
+    vecenv = vector.make(env_creator, **vecenv_kwargs)
 
     policy = make_policy(
         vecenv.driver_env,
