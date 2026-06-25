@@ -173,6 +173,7 @@ class ProgressCheckWrapper(gym.Wrapper):
                 )
             reward += self.subgoal_success_reward
             self._subgoal_index += 1
+            self._sync_goal_context()
 
         if self.progress.all_subgoals_complete(self.planner, self._subgoal_index):
             goal_progress = self.progress.check_success(self.planner, before, after)

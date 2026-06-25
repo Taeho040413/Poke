@@ -14,7 +14,7 @@ hrl:
     forced_mode: interactive
 
   interactive:
-    max_steps: 15000
+    max_steps: 4000
 
   execution:
     tile_move_enabled: true
@@ -22,9 +22,9 @@ hrl:
     battle_action_mask: true
     tile_blocked:
       enabled: true
-      ttl_steps: 100
+      ttl_steps: 1000
       weaken_weight: 0.05
-      retry_window_steps: 50
+      retry_window_steps: 200
       confidence_threshold: 1
 
   checkpoint:
@@ -77,8 +77,8 @@ hrl:
     total_timesteps: 1_000_000
     # 서버 autotune 결과 (32코어): num_envs=32, SPS ~2400 vs serial ~108
     vectorization: multiprocessing
-    num_envs: 32
-    num_workers: 32
+    num_envs: 4
+    num_workers: 4
     env_batch_size: 1
     batch_size: 512
     minibatch_size: 64
@@ -170,16 +170,16 @@ rewards:
       pokecenter_first_entry: 1.0
       target_map_entry: 1.2  # hint.target_map_id 에 도착할 때
       # exploration
-      new_tile: 0.002
+      new_tile: 0.003
       new_map: 0.3
       # battle
-      trainer_battle_win: 0.3
-      wild_battle_win: 0.05
+      trainer_battle_win: 0.2
+      wild_battle_win: 0.02
       pokemon_heal_hp: 0.005
-      party_level: 0.3
+      party_level: 0.2
       # penalty
       step_penalty: -0.0002
-      repeat_npc_penalty: -0.03
+      repeat_npc_penalty: -0.02
       repeat_object_penalty: -0.03
       #invalid_interaction: 0.0
       start_menu_penalty: -0.02

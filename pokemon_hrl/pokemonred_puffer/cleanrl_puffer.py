@@ -885,12 +885,26 @@ class CleanPuffeRL:
         return latest_path
 
     def save_policy_only(self, filename: str = "model_interrupt.pt") -> str:
-        """Save policy weights only — not used for auto-resume (goal/interval checkpoints)."""
+        """Save policy weights only plus a game-state sidecar for restart.
+
+        The .pt file remains policy-only. The emulator state is written separately
+        as game_latest.state in the same run directory so resume can start from
+        the same game point instead of the ROM intro.
+        """
         path = self._checkpoint_run_dir()
         out_path = os.path.join(path, filename)
         tmp = out_path + ".tmp"
         torch.save(self.uncompiled_policy, tmp)
         os.replace(tmp, out_path)
+
+        game_path = self._save_game_checkpoint(path)
+        if game_path:
+            print(
+                "[checkpoint] Ctrl+C — 재시작용 게임 state sidecar 저장: "
+                f"{game_path}",
+                flush=True,
+            )
+
         return out_path
 
     def save_checkpoint(self, *, force: bool = False):

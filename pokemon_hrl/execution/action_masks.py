@@ -8,7 +8,18 @@ from pokemon_hrl.execution.action_space import ACTION_DIM, HrlAction, TILE_ACTIO
 
 _MASK_ALL = np.ones(ACTION_DIM, dtype=np.float32)
 _MASK_BATTLE = np.zeros(ACTION_DIM, dtype=np.float32)
-_TILE_ACTION_IDS = tuple(int(a) for a in TILE_ACTIONS)
+_TILE_ACTION_IDS = tuple(sorted(int(a) for a in TILE_ACTIONS))
+_LOW_OVERWORLD_BLOCKED_IDS = tuple(
+    int(a)
+    for a in (
+        HrlAction.LOW_DOWN,
+        HrlAction.LOW_LEFT,
+        HrlAction.LOW_RIGHT,
+        HrlAction.LOW_UP,
+        HrlAction.LOW_START,
+        HrlAction.LOW_SELECT,
+    )
+)
 _FULL_MASK_WEIGHT = 1.0 - 1e-6
 for _action in (
     HrlAction.LOW_DOWN,
@@ -42,6 +53,11 @@ def compute_hrl_action_mask(
         mask = _MASK_BATTLE.copy()
     else:
         mask = _MASK_ALL.copy()
+        # Outside battle, movement must go through TILE_* macros so collision
+        # tracking, blocked-tile memory, and tile action masks stay consistent.
+        # Raw arrow keys can bypass TileBlockedTracker and cause wall/ledge headbutting.
+        for action_id in _LOW_OVERWORLD_BLOCKED_IDS:
+            mask[action_id] = 0.0
 
     if not tile_move_enabled:
         for tile_action in (
@@ -79,16 +95,20 @@ def _mask_allows_execution(action: int, mask: np.ndarray) -> bool:
 
 
 def _pick_fallback_action(mask: np.ndarray) -> int:
-    for tile_id in _TILE_ACTION_IDS:
-        if float(mask[tile_id]) >= _FULL_MASK_WEIGHT:
-            return tile_id
+    valid_tiles = [
+        tile_id
+        for tile_id in _TILE_ACTION_IDS
+        if float(mask[tile_id]) >= _FULL_MASK_WEIGHT
+    ]
+    if valid_tiles:
+        return int(np.random.choice(valid_tiles))
     low_a = int(HrlAction.LOW_A)
     if 0 <= low_a < mask.shape[0] and float(mask[low_a]) > 0.0:
         return low_a
     valid = np.flatnonzero(mask > 0.0)
     if valid.size == 0:
         return int(HrlAction.LOW_A)
-    return int(valid[0])
+    return int(np.random.choice(valid))
 
 
 def apply_action_mask(action: int, mask: np.ndarray) -> int:

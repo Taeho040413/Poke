@@ -13,7 +13,7 @@ scenarios:
     hint:
       target_map_id: 2
     success_criteria:
-      - stat_on_target_map:first_npc_talk_count
+      - stat_on_target_map:first_object_interaction_count
     failure_criteria:
       - no_progress
 

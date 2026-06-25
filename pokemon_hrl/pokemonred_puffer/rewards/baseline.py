@@ -153,6 +153,7 @@ class ExplorationInteractionRewardEnv(BaselineRewardEnv):
         self._seen_room_map_ids: set[int] = set()
         self._seen_npc_textboxes: set[tuple[int, int]] = set()
         self._seen_map_ids: set[int] = set()
+        self._seen_target_map_entries: set[int] = set()
 
         self._last_blackout_map_id: int | None = None
         self._last_bag_item_counts: dict[int, int] = {}
@@ -191,7 +192,12 @@ class ExplorationInteractionRewardEnv(BaselineRewardEnv):
             self._seen_map_ids.add(map_after)
             self.new_map_count += 1
         target = self.hrl_target_map_id
-        if target is not None and map_after == int(target):
+        if (
+            target is not None
+            and map_after == int(target)
+            and int(target) not in self._seen_target_map_entries
+        ):
+            self._seen_target_map_entries.add(int(target))
             self.target_map_entry_count += 1
 
     def _textbox_active(self) -> bool:
