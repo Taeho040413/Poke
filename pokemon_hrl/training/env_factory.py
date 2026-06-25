@@ -15,6 +15,7 @@ from pokemon_hrl.env.progress_wrapper import ProgressCheckWrapper
 from pokemon_hrl.planner.validation import parse_planner_dict, planner_output_to_dict
 from pokemon_hrl.training.curriculum import pick_scenario
 from pokemon_hrl.training.shared_plan import SharedPlanStore, get_shared_plan_store
+from pokemon_hrl.training.persistent_progress import PersistentProgressWrapper
 
 INTERACTIVE_REWARD_KEY = "hrl.rewards.interactive_mode.InteractiveModeRewardEnv"
 INTERACTIVE_WRAPPER_PROFILE = "interactive"
@@ -152,6 +153,48 @@ def make_interactive_env(
         reward_floor=reward_floor,
         reward_floor_rollback_penalty=rollback_penalty,
     )
+
+    if bool(OmegaConf.select(config, "hrl.checkpoint.shared_progress.enabled", default=True)):
+        env = PersistentProgressWrapper(
+            env,
+            directory=OmegaConf.select(config, "hrl.checkpoint.directory", default="checkpoints"),
+            shared_plan=plan_store,
+            state_name=str(
+                OmegaConf.select(
+                    config,
+                    "hrl.checkpoint.shared_progress.state_name",
+                    default="shared_goal.state",
+                )
+            ),
+            meta_name=str(
+                OmegaConf.select(
+                    config,
+                    "hrl.checkpoint.shared_progress.meta_name",
+                    default="shared_progress.json",
+                )
+            ),
+            load_on_reset=bool(
+                OmegaConf.select(
+                    config,
+                    "hrl.checkpoint.shared_progress.load_on_reset",
+                    default=True,
+                )
+            ),
+            rollback_on_failure=bool(
+                OmegaConf.select(
+                    config,
+                    "hrl.checkpoint.shared_progress.rollback_on_failure",
+                    default=True,
+                )
+            ),
+            rollback_on_reward_floor=bool(
+                OmegaConf.select(
+                    config,
+                    "hrl.checkpoint.shared_progress.rollback_on_reward_floor",
+                    default=True,
+                )
+            ),
+        )
 
     if puffer_wrapper:
         try:

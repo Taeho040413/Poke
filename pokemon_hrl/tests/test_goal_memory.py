@@ -32,10 +32,34 @@ def test_local_maps_center_player_and_blocked_channel():
 
     obs = tracker.build_obs(map_id=1, player_x=3, player_y=4, tile_blocked=blocked)
     local = obs["goal_memory_local"]
-    assert local.shape == (5, 5, 5)
+    assert local.shape == (7, 5, 5)
     center = cfg.local_radius
     assert local[0, center, center] == 1.0  # visited at player
-    assert local[1, center, center + 1] == 1.0  # blocked east of player
+    assert local[2, center, center + 1] == 1.0  # blocked east of player
+
+
+def test_seen_memory_records_5x5_neighborhood():
+    cfg = GoalMemoryConfig(
+        enabled=True,
+        local_radius=2,
+        seen_radius=2,
+        include_visited=False,
+        include_seen=True,
+        include_blocked=False,
+        include_event_sources=False,
+        include_warps=False,
+        include_interactions=False,
+    )
+    tracker = GoalMemoryTracker(cfg)
+    tracker.record_position_context(1, 10, 10)
+
+    obs = tracker.build_obs(map_id=1, player_x=10, player_y=10, tile_blocked=None)
+    local = obs["goal_memory_local"]
+    assert local.shape == (1, 5, 5)
+    assert local[0].sum() == 25.0
+    assert local[0, 0, 0] == 1.0
+    assert local[0, 2, 2] == 1.0
+    assert local[0, 4, 4] == 1.0
 
 
 def test_goal_vector_points_toward_target():
@@ -81,8 +105,8 @@ def test_warp_memory_records_target_tile_for_tile_movement():
 
     obs = tracker.build_obs(map_id=1, player_x=x0, player_y=y0, tile_blocked=None)
     local = obs["goal_memory_local"]
-    # channels: visited, blocked, warps, interact_success, interact_fail
-    warp_channel = local[2]
+    # channels: visited, seen, blocked, event_source, warps, interact_success, interact_fail
+    warp_channel = local[4]
     center = cfg.local_radius
     assert warp_channel[center, center + 1] == 1.0
     assert warp_channel[center, center] == 0.0
@@ -93,6 +117,8 @@ def test_interaction_memory_records_front_tile_not_player_tile():
         enabled=True,
         local_radius=2,
         include_interactions=True,
+        include_seen=False,
+        include_event_sources=False,
         include_visited=False,
         include_blocked=False,
         include_warps=False,
@@ -204,6 +230,43 @@ def test_event_rising_edge_reward():
         events_reader=events,
     )
     assert tracker.consume_step_reward() == 2.0
+
+
+def test_event_source_memory_records_interaction_tile_on_rising_edge():
+    cfg = GoalMemoryConfig(
+        enabled=True,
+        local_radius=2,
+        target_event_done_reward=2.0,
+        include_visited=False,
+        include_seen=False,
+        include_blocked=False,
+        include_event_sources=True,
+        include_warps=False,
+        include_interactions=False,
+    )
+    tracker = GoalMemoryTracker(cfg)
+    tracker.set_context({"target_event_id": "EVENT_GOT_PARCEL", "goal_key": "parcel"})
+
+    events_after = _Events({"EVENT_GOT_PARCEL": True})
+    tracker.on_step_start(_Events({"EVENT_GOT_PARCEL": False}))
+    tracker.on_post_step(
+        map_id=1,
+        x=5,
+        y=5,
+        map_before=1,
+        map_after=1,
+        new_tile_on_map=False,
+        interaction_success=True,
+        interaction_fail=False,
+        events_reader=events_after,
+        interaction_x=6,
+        interaction_y=5,
+    )
+
+    obs = tracker.build_obs(map_id=1, player_x=5, player_y=5, tile_blocked=None)
+    channel = obs["goal_memory_local"][0]
+    center = cfg.local_radius
+    assert channel[center, center + 1] == 1.0
 
 
 def test_object_only_hint_does_not_grant_interaction_reward():

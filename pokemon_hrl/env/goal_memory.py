@@ -1,4 +1,4 @@
-"""Goal-conditioned local memory maps and compact goal vector for RL observations."""
+"""Goal-conditioned spatial memory maps and compact goal vector for RL observations."""
 
 from __future__ import annotations
 
@@ -69,8 +69,13 @@ class GoalContext:
 class GoalMemoryConfig:
     enabled: bool = True
     local_radius: int = 5
+    # Store the agent-observed neighborhood into persistent map memory.
+    # Default 2 means a 5x5 observed patch around the player.
+    seen_radius: int = 2
     include_visited: bool = True
+    include_seen: bool = True
     include_blocked: bool = True
+    include_event_sources: bool = True
     include_warps: bool = True
     include_interactions: bool = True
     include_goal_vector: bool = True
@@ -117,14 +122,17 @@ class GoalMemoryTracker:
         self.config = config
         self.context = GoalContext()
         self._visited: dict[int, set[Coord]] = {}
+        self._seen: dict[int, set[Coord]] = {}
         self._warps: dict[int, set[Coord]] = {}
+        self._event_sources: dict[int, set[Coord]] = {}
         self._interact_success: dict[int, set[Coord]] = {}
         self._interact_fail: dict[int, set[Coord]] = {}
         self._goal_explored: set[Coord] = set()
         self._entered_target_map_for_goal: bool = False
         self._target_event_was_set: bool | None = None
         self._step_rewards = GoalMemoryStepRewards()
-        self._last_local_counts: tuple[int, int] = (0, 0)
+        # blocked, visited, seen, event-source local counts
+        self._last_local_counts: tuple[int, int, int, int] = (0, 0, 0, 0)
         self._last_goal_vector: tuple[float, float] = (0.0, 0.0)
         self._last_map_id: int | None = None
 
@@ -134,12 +142,15 @@ class GoalMemoryTracker:
 
     def reset(self) -> None:
         self._visited.clear()
+        self._seen.clear()
         self._warps.clear()
+        self._event_sources.clear()
         self._interact_success.clear()
         self._interact_fail.clear()
         self._reset_goal_scoped_state()
         self._step_rewards = GoalMemoryStepRewards()
         self._target_event_was_set = None
+        self._last_local_counts = (0, 0, 0, 0)
         self._last_map_id = None
 
     def set_context(self, goal_context: dict[str, Any] | GoalContext | None) -> None:
@@ -178,12 +189,46 @@ class GoalMemoryTracker:
             store[m] = set()
         store[m].add((int(x), int(y)))
 
+    def _map_neighborhood(
+        self,
+        store: dict[int, set[Coord]],
+        map_id: int,
+        x: int,
+        y: int,
+        *,
+        radius: int,
+    ) -> None:
+        r = max(0, int(radius))
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                self._map_set(store, map_id, int(x) + dx, int(y) + dy)
+
+    def record_seen_neighborhood(self, map_id: int, x: int, y: int) -> None:
+        if self.config.include_seen:
+            self._map_neighborhood(
+                self._seen,
+                map_id,
+                x,
+                y,
+                radius=int(self.config.seen_radius),
+            )
+
     def record_visit(self, map_id: int, x: int, y: int) -> None:
         self._map_set(self._visited, map_id, x, y)
+
+    def record_position_context(self, map_id: int, x: int, y: int) -> None:
+        if not self.config.enabled:
+            return
+        self.record_seen_neighborhood(map_id, x, y)
+        self.record_visit(map_id, x, y)
 
     def record_warp(self, map_id: int, x: int, y: int) -> None:
         if self.config.include_warps:
             self._map_set(self._warps, map_id, x, y)
+
+    def record_event_source(self, map_id: int, x: int, y: int) -> None:
+        if self.config.include_event_sources:
+            self._map_set(self._event_sources, map_id, x, y)
 
     def record_interact_success(self, map_id: int, x: int, y: int) -> None:
         if self.config.include_interactions:
@@ -241,8 +286,13 @@ class GoalMemoryTracker:
             if self._near_goal_target(map_id, ix, iy):
                 self._step_rewards.interaction += float(self.config.target_interaction_reward)
 
-        if self._target_event_rising_edge(events_reader):
+        event_done = self._target_event_rising_edge(events_reader)
+        if event_done:
             self._step_rewards.event_done += float(self.config.target_event_done_reward)
+            # Event flags often come from talking to / interacting with the front tile.
+            event_x = int(interaction_x) if interaction_x is not None else int(x)
+            event_y = int(interaction_y) if interaction_y is not None else int(y)
+            self.record_event_source(map_id, event_x, event_y)
 
         self._last_map_id = int(map_id)
 
@@ -328,6 +378,14 @@ class GoalMemoryTracker:
                     player_y=player_y,
                 )
             )
+        if cfg.include_seen:
+            channels.append(
+                self.build_local_channel(
+                    self._seen.get(m, set()),
+                    player_x=player_x,
+                    player_y=player_y,
+                )
+            )
         if cfg.include_blocked:
             blocked: set[Coord] = set()
             if tile_blocked is not None:
@@ -337,6 +395,14 @@ class GoalMemoryTracker:
                 )
             channels.append(
                 self.build_local_channel(blocked, player_x=player_x, player_y=player_y)
+            )
+        if cfg.include_event_sources:
+            channels.append(
+                self.build_local_channel(
+                    self._event_sources.get(m, set()),
+                    player_x=player_x,
+                    player_y=player_y,
+                )
             )
         if cfg.include_warps:
             channels.append(
@@ -424,12 +490,25 @@ class GoalMemoryTracker:
         idx = 0
         visited_count = 0
         blocked_count = 0
+        seen_count = 0
+        event_source_count = 0
         if self.config.include_visited:
             visited_count = int(local[idx].sum())
             idx += 1
+        if self.config.include_seen:
+            seen_count = int(local[idx].sum())
+            idx += 1
         if self.config.include_blocked:
             blocked_count = int(local[idx].sum())
-        self._last_local_counts = (blocked_count, visited_count)
+            idx += 1
+        if self.config.include_event_sources:
+            event_source_count = int(local[idx].sum())
+        self._last_local_counts = (
+            blocked_count,
+            visited_count,
+            seen_count,
+            event_source_count,
+        )
         return {
             "goal_memory_local": local,
             "goal_memory_goal": self.build_goal_vector(
@@ -440,7 +519,7 @@ class GoalMemoryTracker:
     def info_fields(self, *, map_id: int | None = None) -> dict[str, Any]:
         ctx = self.context
         goal_dx, goal_dy = self._last_goal_vector
-        blocked_count, visited_count = self._last_local_counts
+        blocked_count, visited_count, seen_count, event_source_count = self._last_local_counts
         cur_map = int(map_id) if map_id is not None else self._last_map_id
         on_target = (
             ctx.target_map_id is not None
@@ -455,6 +534,8 @@ class GoalMemoryTracker:
             "goal_dy": goal_dy,
             "blocked_local_count": blocked_count,
             "visited_local_count": visited_count,
+            "seen_local_count": seen_count,
+            "event_source_local_count": event_source_count,
             "reward_goal_map": self._step_rewards.map_enter + self._step_rewards.map_explore,
             "reward_goal_event": self._step_rewards.event_done,
             "reward_goal_interaction": self._step_rewards.interaction,
@@ -472,7 +553,9 @@ def goal_memory_observation_space(config: GoalMemoryConfig) -> dict[str, spaces.
     num_channels = sum(
         [
             config.include_visited,
+            config.include_seen,
             config.include_blocked,
+            config.include_event_sources,
             config.include_warps,
             config.include_interactions * 2,
         ]

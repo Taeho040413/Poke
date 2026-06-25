@@ -35,6 +35,14 @@ hrl:
     reward_floor: -10.0
     reward_floor_rollback_penalty: -1.0
 
+    shared_progress:
+      enabled: true
+      state_name: shared_goal.state
+      meta_name: shared_progress.json
+      load_on_reset: true
+      rollback_on_failure: true
+      rollback_on_reward_floor: true
+
   curriculum:
     path: training/curriculum.yaml
 
@@ -48,8 +56,11 @@ hrl:
   goal_memory:
     enabled: true
     local_radius: 5
+    seen_radius: 2
     include_visited: true
+    include_seen: true
     include_blocked: true
+    include_event_sources: true
     include_warps: true
     include_interactions: true
     include_goal_vector: true
@@ -68,8 +79,8 @@ hrl:
     vectorization: multiprocessing
     num_envs: 32
     num_workers: 32
-    env_batch_size: 32
-    batch_size: 1
+    env_batch_size: 1
+    batch_size: 512
     minibatch_size: 64
     bptt_horizon: 16
     update_epochs: 4

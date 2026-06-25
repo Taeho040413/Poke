@@ -191,6 +191,9 @@ class HrlInteractiveRewardEnv(InteractiveModeRewardEnv):
         if "action_mask" not in obs:
             obs = dict(obs)
             obs["action_mask"] = self.get_action_mask()
+        if self._goal_memory_cfg.enabled:
+            x, y, map_id = self.get_game_coords()
+            self._goal_memory.record_position_context(int(map_id), int(x), int(y))
         obs = self._attach_hrl_obs_extensions(obs)
         if self._goal_memory_cfg.enabled:
             info = dict(info or {})
