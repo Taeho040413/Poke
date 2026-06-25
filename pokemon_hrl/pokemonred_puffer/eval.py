@@ -29,6 +29,38 @@ def _load_background() -> np.ndarray:
 BACKGROUND = _load_background()
 
 
+
+def make_agent_memory_grid(counts: np.ndarray, scale: int = 4) -> np.ndarray:
+    """Render full global agent-memory grid without Kanto background.
+
+    Input:
+      - (N, H, W, 3): RGB memory grids from env infos
+      - (N, H, W): scalar visit maps
+
+    Output:
+      - upscaled uint8 RGB image for wandb.Image
+    """
+    counts = np.asarray(counts)
+    if counts.ndim == 4 and counts.shape[-1] == 3:
+        rgb = np.max(counts.astype(np.float32), axis=0)
+    elif counts.ndim == 3:
+        visit = np.max(counts.astype(np.float32), axis=0)
+        if np.max(visit) > 0:
+            visit = visit / np.max(visit)
+        rgb = np.zeros((*visit.shape, 3), dtype=np.float32)
+        rgb[..., 1] = visit
+    else:
+        raise ValueError(f"Unsupported grid shape for make_agent_memory_grid: {counts.shape}")
+
+    rgb = np.clip(rgb, 0.0, 1.0)
+    image = (255.0 * rgb).astype(np.uint8)
+
+    scale = max(1, int(scale))
+    if scale > 1:
+        image = np.repeat(np.repeat(image, scale, axis=0), scale, axis=1)
+    return image
+
+
 def make_pokemon_red_overlay(counts: np.ndarray):
     """Aggregate env exploration maps onto the Kanto background.
 

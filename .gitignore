@@ -1,29 +1,58 @@
-# Python
+# Python cache
 __pycache__/
 *.py[cod]
-*$py.class
-*.egg-info/
-.eggs/
-dist/
-build/
+*.pyo
 .pytest_cache/
-*.so
+.mypy_cache/
+.ruff_cache/
 
-# IDE / editor
-.vscode/
+# Local env
+.venv/
+venv/
+.env
+.env.*
 
-# ML / training artifacts
+# Logs / local outputs
 wandb/
-runs/
+logs/
+videos/
+rollouts/
+outputs/
+*.log
+
+# Temporary patch files
+*.orig
+*.rej
+*.bak
+*.patch
+*.diff
+patch_*.py
+fix_*.py
+enable_*.py
+
+# Training outputs
 pokemon_hrl/runs/
 pokemon_hrl/checkpoints/
+runs/
+checkpoints/
 *.pt
-*.db
+*.pth
+*.ckpt
+*.state
 
-# Game ROM (supply locally; not redistributable)
+# ROM / emulator local files
 *.gb
-*.gb.ram
+*.gbc
+*.sav
+*.ram
 
-# OS
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# OS/editor
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/

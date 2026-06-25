@@ -242,9 +242,31 @@ class HrlInteractiveRewardEnv(InteractiveModeRewardEnv):
                 )
                 if move_result.retry_penalty:
                     self.blocked_tile_retry_count += 1
+
+                if hasattr(self, "blocked_tile_map"):
+                    gy, gx = local_to_global(
+                        int(move_result.target_y),
+                        int(move_result.target_x),
+                        int(move_result.target_map),
+                    )
+                    if 0 <= gy < self.blocked_tile_map.shape[0] and 0 <= gx < self.blocked_tile_map.shape[1]:
+                        self.blocked_tile_map[gy, gx] = max(
+                            self.blocked_tile_map[gy, gx],
+                            float(
+                                self._tile_blocked.target_weight(
+                                    int(move_result.target_map),
+                                    int(move_result.target_x),
+                                    int(move_result.target_y),
+                                )
+                            ),
+                        )
             elif exec_result.moved_tile:
                 tx, ty = tile_target_coords(x0, y0, action)
                 self._tile_blocked.clear_target(m0, tx, ty)
+                if hasattr(self, "blocked_tile_map"):
+                    gy, gx = local_to_global(int(ty), int(tx), int(m0))
+                    if 0 <= gy < self.blocked_tile_map.shape[0] and 0 <= gx < self.blocked_tile_map.shape[1]:
+                        self.blocked_tile_map[gy, gx] = 0.0
         self._tile_blocked.tick()
         self._executor.run_post_action_hooks(self, pressed_action=action)
 

@@ -26,21 +26,14 @@ def find_latest_saved_model(
     if exp_id:
         run_dir = root / exp_id
         if run_dir.is_dir():
-            latest = run_dir / "model_latest.pt"
-            if latest.is_file():
-                return latest
-            picked = _pick_latest_checkpoint_by_mtime(_iter_numeric_model_pts(run_dir))
+            picked = _pick_latest_checkpoint_by_mtime(_iter_resume_model_candidates(run_dir))
             if picked is not None:
                 return picked
     if global_fallback:
-        latest_candidates = list(root.rglob("model_latest.pt"))
-        if latest_candidates:
-            return _pick_latest_checkpoint_by_mtime(latest_candidates)
-        all_pts = [
-            p
-            for p in root.rglob("model_*.pt")
-            if _model_checkpoint_sort_key(p) >= 0
-        ]
+        all_pts: list[Path] = []
+        for run_dir in root.rglob("*"):
+            if run_dir.is_dir():
+                all_pts.extend(_iter_resume_model_candidates(run_dir))
         if all_pts:
             return _pick_latest_checkpoint_by_mtime(all_pts)
     return None
@@ -136,6 +129,31 @@ def _iter_numeric_model_pts(dir_path: Path) -> list[Path]:
     ]
 
 
+
+def _iter_resume_model_candidates(dir_path: Path) -> list[Path]:
+    """Return resume candidates including interrupt/latest/numeric checkpoints."""
+    candidates: list[Path] = []
+    latest = dir_path / "model_latest.pt"
+    interrupt = dir_path / "model_interrupt.pt"
+    if latest.is_file():
+        candidates.append(latest)
+    candidates.extend(_iter_numeric_model_pts(dir_path))
+    if interrupt.is_file():
+        candidates.append(interrupt)
+
+    # dedupe while preserving paths
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in candidates:
+        rp = p.expanduser().resolve()
+        if rp in seen:
+            continue
+        seen.add(rp)
+        out.append(p)
+    return out
+
+
+
 def _pick_latest_checkpoint_by_mtime(candidates: list[Path]) -> Path | None:
     if not candidates:
         return None
@@ -174,7 +192,7 @@ def resolve_resume_checkpoint(path: Path | None) -> tuple[Path | None, Path | No
             return None, None
         trainer = path.parent / "trainer_state.pt"
         return path, trainer if trainer.exists() else None
-    models = _iter_numeric_model_pts(path)
+    models = _iter_resume_model_candidates(path)
     if not models:
         return None, None
     model = _pick_latest_checkpoint_by_mtime(models)

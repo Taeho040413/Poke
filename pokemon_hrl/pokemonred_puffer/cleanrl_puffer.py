@@ -30,7 +30,7 @@ from rich.table import Table
 import wandb
 from pokemonred_puffer.data.moves import Moves
 from pokemonred_puffer.data.species import Species
-from pokemonred_puffer.eval import make_pokemon_red_overlay
+from pokemonred_puffer.eval import make_agent_memory_grid
 from pokemonred_puffer.global_map import GLOBAL_MAP_SHAPE
 from pokemonred_puffer.profile import Profile, Utilization
 from pokemonred_puffer.wrappers.sqlite import SqliteStateResetWrapper
@@ -532,9 +532,12 @@ class CleanPuffeRL:
                 # You could also just return infos and have it in demo
                 if "pokemon_exploration_map" in k and self.config.save_overlay is True:
                     if self.epoch % self.config.overlay_interval == 0:
-                        overlay = make_pokemon_red_overlay(np.stack(self.infos[k], axis=0))
+                        grid = make_agent_memory_grid(
+                            np.stack(self.infos[k], axis=0),
+                            scale=getattr(self.config, "grid_map_scale", 4),
+                        )
                         if self.wandb_client is not None:
-                            self.stats["Media/aggregate_exploration_map"] = wandb.Image(overlay)
+                            self.stats["Media/agent_memory_grid"] = wandb.Image(grid)
                 elif any(s in k for s in ["state", "env_id", "species", "levels", "moves"]):
                     continue
                 elif not wandb_environment_scalar_allowed(k, _wandb_env_mode):

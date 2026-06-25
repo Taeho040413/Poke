@@ -50,8 +50,8 @@ hrl:
     goal_events: true
 
   progress:
-    subgoal_success_reward: 3.0
-    goal_success_reward: 5.0
+    subgoal_success_reward: 5.0
+    goal_success_reward: 10.0
 
   goal_memory:
     enabled: true
@@ -92,7 +92,10 @@ hrl:
     save_checkpoint: true
     checkpoint_interval: 100
     resume_checkpoint: auto
-    load_optimizer_state: true
+    save_overlay: true
+    overlay_interval: 10
+    grid_map_scale: 4
+    load_optimizer_state: false
     sqlite_wrapper: false
     async_wrapper: false
     save_on_first_gym: false
@@ -165,7 +168,7 @@ rewards:
       npc_first_talk: 0.6
       object_first_interaction: 0.05
       #new_npc_textbox: 0.0
-      new_building: 0.6
+      new_building: 0.7
       new_room: 0.4
       pokecenter_first_entry: 1.0
       target_map_entry: 1.2  # hint.target_map_id 에 도착할 때
@@ -180,7 +183,7 @@ rewards:
       # penalty
       step_penalty: -0.0002
       repeat_npc_penalty: -0.02
-      repeat_object_penalty: -0.03
+      repeat_object_penalty: -0.05
       #invalid_interaction: 0.0
       start_menu_penalty: -0.02
       #wild_encounter_penalty: 0.0

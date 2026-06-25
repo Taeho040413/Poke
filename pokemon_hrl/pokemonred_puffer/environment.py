@@ -472,8 +472,9 @@ class RedGymEnv(Env):
         self.reward_explore_map *= 0
         self.cut_explore_map *= 0
         self.wild_encounter_tile_map *= 0
-        self.high_reward_tile_map *= 0
         self.building_entry_tile_map *= 0
+        self.blocked_tile_map *= 0
+        self.blocked_tile_counts.clear()
         self.reset_mem()
 
         self.update_pokedex()
@@ -531,10 +532,11 @@ class RedGymEnv(Env):
         self.explore_map = np.zeros(GLOBAL_MAP_SHAPE, dtype=np.float32)
         self.reward_explore_map = np.zeros(GLOBAL_MAP_SHAPE, dtype=np.float32)
         self.cut_explore_map = np.zeros(GLOBAL_MAP_SHAPE, dtype=np.float32)
-        # wandb Kanto overlay: 야생 조우 위치(빨강) / 고보상(파랑) / 건물 진입(보라) 표시
+        # W&B raw memory grid support. Agent input uses explore_map cropped into visited_mask.
         self.wild_encounter_tile_map = np.zeros(GLOBAL_MAP_SHAPE, dtype=np.float32)
-        self.high_reward_tile_map = np.zeros(GLOBAL_MAP_SHAPE, dtype=np.float32)
         self.building_entry_tile_map = np.zeros(GLOBAL_MAP_SHAPE, dtype=np.float32)
+        self.blocked_tile_map = np.zeros(GLOBAL_MAP_SHAPE, dtype=np.float32)
+        self.blocked_tile_counts: dict[tuple[int, int, int], int] = {}
         self.seen_map_ids = np.zeros(256)
         self.seen_npcs = {}
         self.seen_warps = {}
@@ -677,14 +679,31 @@ class RedGymEnv(Env):
                         """
             '''
             gr, gc = local_to_global(player_y, player_x, map_n)
+            # visited_mask is a single-channel local memory image used by the policy.
+            # Reserve value ranges so blocked tiles do not collide with ordinary visitation:
+            #   0       = unvisited
+            #   1..128  = visited intensity
+            #   255     = blocked tile
+            local_visit = np.clip(self.explore_map[gr - 4 : gr + 6, gc - 4 : gc + 6], 0.0, 1.0)
             visited_mask = (
-                255
+                128
                 * np.repeat(
-                    np.repeat(self.explore_map[gr - 4 : gr + 6, gc - 4 : gc + 6], 16 // scale, 0),
+                    np.repeat(local_visit, 16 // scale, 0),
                     16 // scale,
                     -1,
                 )
             ).astype(np.uint8)[6 // scale : -10 // scale, :]
+
+            blocked_mask = (
+                255
+                * np.repeat(
+                    np.repeat(self.blocked_tile_map[gr - 4 : gr + 6, gc - 4 : gc + 6], 16 // scale, 0),
+                    16 // scale,
+                    -1,
+                )
+            ).astype(np.uint8)[6 // scale : -10 // scale, :]
+
+            visited_mask[blocked_mask > 0] = 255
             visited_mask = np.expand_dims(visited_mask, -1)
 
         """
@@ -854,7 +873,16 @@ class RedGymEnv(Env):
         # update the a press before we use it so we dont trigger the font loaded early return
         if self.is_a_press_action(action):
             self.update_a_press()
+
+        blocked_move_candidate = None
+        # This detector is for the base Red 7-button action space only.
+        # HRL envs use ACTION_DIM=12 and handle tile blocking in interactive_env.py.
+        if getattr(self.action_space, "n", len(VALID_ACTIONS)) == len(VALID_ACTIONS):
+            blocked_move_candidate = self._blocked_move_candidate(action)
+
         self.run_action_on_emulator(action)
+        if blocked_move_candidate is not None and self.get_game_coords() == blocked_move_candidate[0]:
+            self._mark_blocked_tile(blocked_move_candidate[1])
         self.events = EventFlags(self.pyboy)
         self.missables = MissableFlags(self.pyboy)
         self.flags = Flags(self.pyboy)
@@ -865,10 +893,6 @@ class RedGymEnv(Env):
         self.party_size = self._party_count_clamped()
         self.update_max_op_level()
         new_reward = self.update_reward()
-        if new_reward >= 1.5:
-            _x, _y, _map_n = self.get_game_coords()
-            _gy, _gx = local_to_global(_y, _x, _map_n)
-            self.high_reward_tile_map[_gy, _gx] = 1.0
         self.update_map_progress()
         if self.perfect_ivs:
             self.set_perfect_iv_dvs()
@@ -1600,6 +1624,38 @@ class RedGymEnv(Env):
             self.pyboy.memory[self.pyboy.symbol_lookup("wRepelRemainingSteps")[1]] = 0xFF
             self.pyboy.memory[self.pyboy.symbol_lookup("wCurEnemyLevel")[1]] = 0x01
 
+
+
+
+
+    def build_pokemon_exploration_rgb(self):
+        """Full global agent-memory grid for W&B.
+
+        This is not the Kanto background overlay. It visualizes the same global
+        memory source that visited_mask is cropped from.
+
+        Colors:
+          dark/black = unseen
+          green      = visited memory from explore_map
+          red        = blocked target tile from blocked_tile_map
+        """
+        h, w = GLOBAL_MAP_SHAPE
+        rgb = np.zeros((h, w, 3), dtype=np.float32)
+
+        max_visit = max(float(getattr(self, "exploration_max", 1.0)), 1e-6)
+        visited = np.clip(self.explore_map.astype(np.float32) / max_visit, 0.0, 1.0)
+
+        rgb[..., 0] = 0.08 * visited
+        rgb[..., 1] = 0.85 * visited
+        rgb[..., 2] = 0.08 * visited
+
+        blocked = getattr(self, "blocked_tile_map", None)
+        if blocked is not None:
+            rgb[np.asarray(blocked) > 0] = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        return rgb
+
+
     def agent_stats(self, action):
         levels = [
             self.read_m(f"wPartyMon{i+1}Level") for i in range(self._party_count_clamped())
@@ -1660,6 +1716,7 @@ class RedGymEnv(Env):
                     "bag_menu": self.seen_bag_menu,
                     "action_bag_menu": self.seen_action_bag_menu,
                 },
+                "blocked_tiles": int(np.sum(self.blocked_tile_map > 0)),
                 "blackout_check": self.blackout_check,
                 "item_count": self.read_m(0xD31D),
                 "reset_count": self.reset_count,
@@ -1818,6 +1875,56 @@ class RedGymEnv(Env):
         # self.seen_global_coords[local_to_global(y_pos, x_pos, map_n)] = 1
         self.seen_map_ids[map_n] = 1
 
+    def _blocked_move_candidate(self, action: int):
+        """Return ((origin_x, origin_y, map), (target_x, target_y, map)) for a likely wall bump.
+
+        We only consider a directional input as blocked if the player is already facing that
+        direction. This avoids marking normal turn-in-place actions as blocked.
+        """
+        if self.read_m("wIsInBattle") != 0 or self.read_m("wFontLoaded") != 0:
+            return None
+
+        action_i = int(action)
+        if action_i < 0 or action_i >= len(VALID_ACTIONS):
+            return None
+
+        action_event = VALID_ACTIONS[action_i]
+        target_direction = {
+            WindowEvent.PRESS_ARROW_DOWN: 0x0,
+            WindowEvent.PRESS_ARROW_UP: 0x4,
+            WindowEvent.PRESS_ARROW_LEFT: 0x8,
+            WindowEvent.PRESS_ARROW_RIGHT: 0xC,
+        }.get(action_event)
+        if target_direction is None:
+            return None
+
+        current_direction = int(self.read_m("wSpritePlayerStateData1FacingDirection"))
+        if current_direction != target_direction:
+            return None
+
+        x_pos, y_pos, map_n = self.get_game_coords()
+        if target_direction == 0x0:
+            target = (x_pos, y_pos + 1, map_n)
+        elif target_direction == 0x4:
+            target = (x_pos, y_pos - 1, map_n)
+        elif target_direction == 0x8:
+            target = (x_pos - 1, y_pos, map_n)
+        else:
+            target = (x_pos + 1, y_pos, map_n)
+
+        return (x_pos, y_pos, map_n), target
+
+    def _mark_blocked_tile(self, coords: tuple[int, int, int]) -> None:
+        # Require two confirmed bumps to reduce false positives from transient blockers/NPCs.
+        self.blocked_tile_counts[coords] = self.blocked_tile_counts.get(coords, 0) + 1
+        if self.blocked_tile_counts[coords] < 2:
+            return
+
+        x_pos, y_pos, map_n = coords
+        gy, gx = local_to_global(y_pos, x_pos, map_n)
+        if 0 <= gy < self.blocked_tile_map.shape[0] and 0 <= gx < self.blocked_tile_map.shape[1]:
+            self.blocked_tile_map[gy, gx] = 1.0
+
     def update_a_press(self):
         if self.read_m("wIsInBattle") != 0 or self.read_m("wFontLoaded"):
             return
@@ -1834,31 +1941,6 @@ class RedGymEnv(Env):
             x_pos += 1
         # if self.scale_map_id(map_n):
         self.a_press.add((x_pos, y_pos, map_n))
-
-    def build_pokemon_exploration_rgb(self) -> npt.NDArray[np.float32]:
-        """wandb Kanto 오버레이: 연두=방문, 빨강=야생 조우 누적, 파랑=고보상, 보라=건물 진입."""
-        h, w = GLOBAL_MAP_SHAPE
-        rgb = np.zeros((h, w, 3), dtype=np.float32)
-        visit = self.explore_map > 0
-        light_green = np.array([144.0, 238.0, 144.0], dtype=np.float32) / 255.0
-        rgb[visit] = light_green
-
-        # 야생 조우 누적 횟수를 붉은 강도로 매핑. stuck은 더 이상 시각화하지 않는다.
-        encounters = self.wild_encounter_tile_map
-        emax = float(encounters.max()) if encounters.size else 0.0
-        if emax > 1e-6:
-            t = encounters / emax
-            red_tint = np.array([0.95, 0.2, 0.2], dtype=np.float32)
-            m = encounters > 0
-            # 방문 타일 위에 조우 빈도만큼 붉게 블렌딩(자주 나오던 풀숲일수록 진한 빨강)
-            tt = t[m, np.newaxis]
-            rgb[m] = (1.0 - tt) * rgb[m] + tt * red_tint
-
-        blue = np.array([0.2, 0.55, 1.0], dtype=np.float32)
-        rgb[self.high_reward_tile_map > 0] = blue
-        purple = np.array([0.72, 0.28, 0.9], dtype=np.float32)
-        rgb[self.building_entry_tile_map > 0] = purple
-        return rgb
 
     def get_explore_map(self):
         """Reconstruct a scalar map from ``seen_coords`` (keyed by tileset, then (x,y,map))."""
